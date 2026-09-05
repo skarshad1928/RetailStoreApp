@@ -10,18 +10,21 @@ import plotly.graph_objects as go
 
 
 # ============================================================
-# APP
+# APP & SERVER INITIALIZATION (Required for Vercel WSGI)
 # ============================================================
 
-app = Dash(
+dash_app = Dash(
     __name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     suppress_callback_exceptions=True
 )
 
-server = app.server
+server = dash_app.server
 
-app.title = "Online Retail Intelligence Dashboard"
+# CRITICAL FOR VERCEL: Vercel serverless function launcher looks for 'app'
+app = server
+
+dash_app.title = "Online Retail Intelligence Dashboard"
 
 
 # ============================================================
@@ -53,11 +56,6 @@ print("ONLINE RETAIL DASHBOARD")
 print("=" * 80)
 print("BASE DIR:", BASE_DIR)
 print("DATA DIR:", DATA_DIR)
-print("SALES FILE:", SALES_FILE)
-print("PRODUCT FILE:", PRODUCT_FILE)
-print("RFM FILE:", RFM_FILE)
-print("FILE CHECK")
-print("-" * 80)
 print("Sales CSV exists:", os.path.exists(SALES_FILE))
 print("Product CSV exists:", os.path.exists(PRODUCT_FILE))
 print("RFM CSV exists:", os.path.exists(RFM_FILE))
@@ -65,46 +63,25 @@ print("=" * 80)
 
 
 # ============================================================
-# LOAD CSV
+# LOAD & PREPARE DATA
 # ============================================================
 
 def load_csv(path, name):
-    print("\n" + "=" * 80)
-    print("LOADING:", name)
-    print("=" * 80)
-
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
-
-    df = pd.read_csv(path, low_memory=False)
-
-    print(f"{name} loaded successfully")
-    print("Rows:", f"{len(df):,}")
-    print("Columns:", list(df.columns))
-
-    return df
+    return pd.read_csv(path, low_memory=False)
 
 
 def find_column(df, possible_names):
-    normalized = {}
-    for column in df.columns:
-        key = str(column).strip().lower().replace(" ", "").replace("_", "")
-        normalized[key] = column
-
+    normalized = {str(col).strip().lower().replace(" ", "").replace("_", ""): col for col in df.columns}
     for name in possible_names:
         key = str(name).strip().lower().replace(" ", "").replace("_", "")
         if key in normalized:
             return normalized[key]
-
     return None
 
 
-# ============================================================
-# PREPARE DATA  (unchanged logic - this part already works)
-# ============================================================
-
 try:
-
     sales_raw = load_csv(SALES_FILE, "online_retail_processed.csv")
     product_raw = load_csv(PRODUCT_FILE, "product_segment.csv")
     rfm_raw = load_csv(RFM_FILE, "rfm_segmented_customers.csv")
@@ -118,19 +95,6 @@ try:
     customer_col = find_column(sales_raw, ["CustomerID", "CustomerId", "Customer"])
     country_col = find_column(sales_raw, ["Country"])
     total_col = find_column(sales_raw, ["total_amount", "TotalAmount", "Revenue", "Sales"])
-
-    print("\n" + "=" * 80)
-    print("SALES COLUMNS")
-    print("=" * 80)
-    print("Invoice:", invoice_col)
-    print("Stock:", stock_col)
-    print("Description:", description_col)
-    print("Quantity:", quantity_col)
-    print("Date:", date_col)
-    print("Price:", price_col)
-    print("Customer:", customer_col)
-    print("Country:", country_col)
-    print("Total:", total_col)
 
     required = {
         "InvoiceNo": invoice_col,
@@ -174,9 +138,7 @@ try:
         sales_df["total_amount"] = sales_df["Quantity"] * sales_df["UnitPrice"]
 
     sales_df = sales_df.dropna(subset=["InvoiceDate", "Quantity", "UnitPrice", "total_amount"])
-
     sales_df = sales_df[~sales_df["InvoiceNo"].str.upper().str.startswith("C")]
-
     sales_df = sales_df[
         (sales_df["Quantity"] > 0)
         & (sales_df["UnitPrice"] > 0)
@@ -189,17 +151,9 @@ try:
     sales_df["DayName"] = sales_df["InvoiceDate"].dt.day_name()
 
     product_df = product_raw.copy()
-
     product_stock_col = find_column(product_df, ["StockCode", "Stock"])
     category_col = find_column(product_df, ["Category", "ProductCategory"])
     price_segment_col = find_column(product_df, ["PriceSegment", "Price Segment", "Price_Segment"])
-
-    print("\n" + "=" * 80)
-    print("PRODUCT COLUMNS")
-    print("=" * 80)
-    print("Stock:", product_stock_col)
-    print("Category:", category_col)
-    print("Price Segment:", price_segment_col)
 
     if product_stock_col:
         product_lookup = product_df.copy()
@@ -220,7 +174,6 @@ try:
             rename_map[price_segment_col] = "PriceSegment"
 
         product_lookup = product_lookup.rename(columns=rename_map)
-
         sales_df = sales_df.merge(product_lookup, on="StockCode", how="left")
 
     if "Category" not in sales_df.columns:
@@ -238,21 +191,11 @@ try:
     sales_df["PriceSegment"] = sales_df["PriceSegment"].fillna("Unknown").astype(str)
 
     rfm_df = rfm_raw.copy()
-
     rfm_customer_col = find_column(rfm_df, ["CustomerID", "CustomerId", "Customer"])
     rfm_segment_col = find_column(rfm_df, ["Segment", "CustomerSegment", "Customer_Segment"])
     recency_col = find_column(rfm_df, ["Recency"])
     frequency_col = find_column(rfm_df, ["Frequency"])
     monetary_col = find_column(rfm_df, ["Monetary", "MonetaryValue", "Monetary_Value"])
-
-    print("\n" + "=" * 80)
-    print("RFM COLUMNS")
-    print("=" * 80)
-    print("Customer:", rfm_customer_col)
-    print("Segment:", rfm_segment_col)
-    print("Recency:", recency_col)
-    print("Frequency:", frequency_col)
-    print("Monetary:", monetary_col)
 
     if rfm_customer_col:
         rfm_numeric = pd.to_numeric(rfm_df[rfm_customer_col], errors="coerce")
@@ -276,35 +219,20 @@ try:
     )
 
     analytics_df = sales_df.merge(rfm_lookup, on="CustomerID", how="left")
-
     analytics_df["Segment"] = analytics_df["Segment"].fillna("Unknown Customer").astype(str)
     analytics_df["Recency"] = pd.to_numeric(analytics_df["Recency"], errors="coerce")
     analytics_df["Frequency"] = pd.to_numeric(analytics_df["Frequency"], errors="coerce")
     analytics_df["Monetary"] = pd.to_numeric(analytics_df["Monetary"], errors="coerce")
-
     analytics_df = analytics_df.replace([np.inf, -np.inf], np.nan).reset_index(drop=True)
 
     if analytics_df.empty:
         raise ValueError("Analytics dataframe is empty.")
 
-    print("\n" + "=" * 80)
-    print("DATA PREPARATION SUCCESS")
-    print("=" * 80)
-    print("Sales rows:", f"{len(sales_raw):,}")
-    print("Product rows:", f"{len(product_raw):,}")
-    print("RFM rows:", f"{len(rfm_raw):,}")
-    print("Analytics rows:", f"{len(analytics_df):,}")
-    print("Orders:", f"{analytics_df['InvoiceNo'].nunique():,}")
-    print("Products:", f"{analytics_df['StockCode'].nunique():,}")
-    print("Countries:", f"{analytics_df['Country'].nunique():,}")
-    print("Revenue:", f"£{analytics_df['total_amount'].sum():,.2f}")
+    print("DATA PREPARATION SUCCESS - Rows loaded:", len(analytics_df))
 
 except Exception as error:
     DATA_ERROR = str(error)
-    print("\n" + "=" * 80)
-    print("DATA PREPARATION FAILED")
-    print("=" * 80)
-    print(DATA_ERROR)
+    print("DATA PREPARATION FAILED:", DATA_ERROR)
     traceback.print_exc()
 
 
@@ -315,7 +243,6 @@ except Exception as error:
 if not analytics_df.empty:
     MIN_DATE = analytics_df["InvoiceDate"].min().date()
     MAX_DATE = analytics_df["InvoiceDate"].max().date()
-
     COUNTRY_OPTIONS = sorted(analytics_df["Country"].dropna().unique().tolist())
     CATEGORY_OPTIONS = sorted(analytics_df["Category"].dropna().unique().tolist())
     PRICE_OPTIONS = sorted(analytics_df["PriceSegment"].dropna().unique().tolist())
@@ -330,7 +257,7 @@ else:
 
 
 # ============================================================
-# FIGURE HELPERS
+# HELPERS & FILTER LOGIC
 # ============================================================
 
 def empty_figure(message):
@@ -339,19 +266,12 @@ def empty_figure(message):
         text=message, x=0.5, y=0.5, xref="paper", yref="paper",
         showarrow=False, font=dict(size=16)
     )
-    fig.update_layout(
-        template="plotly_white", height=360,
-        margin=dict(l=50, r=30, t=60, b=50)
-    )
+    fig.update_layout(template="plotly_white", height=360, margin=dict(l=50, r=30, t=60, b=50))
     return fig
 
 
 def style_graph(fig):
-    fig.update_layout(
-        template="plotly_white", height=380,
-        margin=dict(l=50, r=30, t=60, b=50),
-        hovermode="closest"
-    )
+    fig.update_layout(template="plotly_white", height=380, margin=dict(l=50, r=30, t=60, b=50), hovermode="closest")
     return fig
 
 
@@ -364,10 +284,6 @@ def create_kpi(title, value):
         className="kpi-card"
     )
 
-
-# ============================================================
-# FILTER LOGIC
-# ============================================================
 
 def filter_data(df, countries, categories, prices, segments, start_date, end_date):
     result = df.copy()
@@ -393,22 +309,7 @@ def filter_data(df, countries, categories, prices, segments, start_date, end_dat
 
 
 def get_filtered_df(countries, categories, prices, segments, start_date, end_date):
-    print("\n" + "=" * 80)
-    print("FILTERING")
-    print("Analytics rows:", len(analytics_df))
-    print("Countries:", countries)
-    print("Categories:", categories)
-    print("Prices:", prices)
-    print("Segments:", segments)
-    print("Start:", start_date)
-    print("End:", end_date)
-
-    df = filter_data(analytics_df, countries, categories, prices, segments, start_date, end_date)
-
-    print("FILTERED ROWS:", f"{len(df):,}")
-    print("=" * 80)
-
-    return df
+    return filter_data(analytics_df, countries, categories, prices, segments, start_date, end_date)
 
 
 # ============================================================
@@ -422,50 +323,24 @@ def filter_row():
             dbc.Row([
                 dbc.Col([
                     html.Label("Country"),
-                    dcc.Dropdown(
-                        id="country-filter",
-                        options=[{"label": x, "value": x} for x in COUNTRY_OPTIONS],
-                        multi=True, placeholder="All Countries"
-                    )
+                    dcc.Dropdown(id="country-filter", options=[{"label": x, "value": x} for x in COUNTRY_OPTIONS], multi=True, placeholder="All Countries")
                 ], md=2),
-
                 dbc.Col([
                     html.Label("Product Category"),
-                    dcc.Dropdown(
-                        id="category-filter",
-                        options=[{"label": x, "value": x} for x in CATEGORY_OPTIONS],
-                        multi=True, placeholder="All Categories"
-                    )
+                    dcc.Dropdown(id="category-filter", options=[{"label": x, "value": x} for x in CATEGORY_OPTIONS], multi=True, placeholder="All Categories")
                 ], md=2),
-
                 dbc.Col([
                     html.Label("Price Segment"),
-                    dcc.Dropdown(
-                        id="price-filter",
-                        options=[{"label": x, "value": x} for x in PRICE_OPTIONS],
-                        multi=True, placeholder="All Price Segments"
-                    )
+                    dcc.Dropdown(id="price-filter", options=[{"label": x, "value": x} for x in PRICE_OPTIONS], multi=True, placeholder="All Price Segments")
                 ], md=2),
-
                 dbc.Col([
                     html.Label("Customer Segment"),
-                    dcc.Dropdown(
-                        id="customer-segment-filter",
-                        options=[{"label": x, "value": x} for x in SEGMENT_OPTIONS],
-                        multi=True, placeholder="All Customer Segments"
-                    )
+                    dcc.Dropdown(id="customer-segment-filter", options=[{"label": x, "value": x} for x in SEGMENT_OPTIONS], multi=True, placeholder="All Customer Segments")
                 ], md=2),
-
                 dbc.Col([
                     html.Label("Date Range"),
-                    dcc.DatePickerRange(
-                        id="date-filter",
-                        start_date=MIN_DATE, end_date=MAX_DATE,
-                        min_date_allowed=MIN_DATE, max_date_allowed=MAX_DATE,
-                        display_format="YYYY-MM-DD"
-                    )
+                    dcc.DatePickerRange(id="date-filter", start_date=MIN_DATE, end_date=MAX_DATE, min_date_allowed=MIN_DATE, max_date_allowed=MAX_DATE, display_format="YYYY-MM-DD")
                 ], md=3),
-
                 dbc.Col([
                     html.Label("Action"),
                     dbc.Button("Reset", id="reset-button", color="primary", className="w-100")
@@ -476,97 +351,59 @@ def filter_row():
     )
 
 
-app.layout = dbc.Container(
+dash_app.layout = dbc.Container(
     [
         dcc.Interval(id="startup-trigger", interval=500, n_intervals=0, max_intervals=1),
-
         html.Div([
             html.H2("Online Retail Intelligence Dashboard", className="dashboard-title"),
             html.P("Customer, Product and Sales Analytics", className="dashboard-subtitle")
         ], className="dashboard-header"),
-
         dbc.Alert(
             "Data loaded successfully." if not DATA_ERROR else f"Data loading failed: {DATA_ERROR}",
             color="success" if not DATA_ERROR else "danger",
             className="mb-3"
         ),
-
         filter_row(),
-
         dbc.Row([
             dbc.Col(html.Div(id="kpi-revenue"), md=3),
             dbc.Col(html.Div(id="kpi-orders"), md=3),
             dbc.Col(html.Div(id="kpi-customers"), md=3),
             dbc.Col(html.Div(id="kpi-products"), md=3),
         ], className="mb-3"),
-
         dbc.Tabs(
             id="main-tabs",
             active_tab="tab-exec",
             children=[
-
                 dbc.Tab(
-                    label="Executive Overview",
-                    tab_id="tab-exec",
+                    label="Executive Overview", tab_id="tab-exec",
                     children=[
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="monthly-sales"), md=8),
-                            dbc.Col(dcc.Graph(id="country-sales"), md=4),
-                        ]),
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="category-sales"), md=6),
-                            dbc.Col(dcc.Graph(id="segment-distribution"), md=6),
-                        ])
+                        dbc.Row([dbc.Col(dcc.Graph(id="monthly-sales"), md=8), dbc.Col(dcc.Graph(id="country-sales"), md=4)]),
+                        dbc.Row([dbc.Col(dcc.Graph(id="category-sales"), md=6), dbc.Col(dcc.Graph(id="segment-distribution"), md=6)])
                     ]
                 ),
-
                 dbc.Tab(
-                    label="Customer Intelligence",
-                    tab_id="tab-customer",
+                    label="Customer Intelligence", tab_id="tab-customer",
                     children=[
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="rfm-scatter"), md=6),
-                            dbc.Col(dcc.Graph(id="customer-revenue"), md=6),
-                        ]),
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="recency-frequency"), md=6),
-                            dbc.Col(dcc.Graph(id="segment-revenue"), md=6),
-                        ])
+                        dbc.Row([dbc.Col(dcc.Graph(id="rfm-scatter"), md=6), dbc.Col(dcc.Graph(id="customer-revenue"), md=6)]),
+                        dbc.Row([dbc.Col(dcc.Graph(id="recency-frequency"), md=6), dbc.Col(dcc.Graph(id="segment-revenue"), md=6)])
                     ]
                 ),
-
                 dbc.Tab(
-                    label="Product Intelligence",
-                    tab_id="tab-product",
+                    label="Product Intelligence", tab_id="tab-product",
                     children=[
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="top-products"), md=6),
-                            dbc.Col(dcc.Graph(id="price-segment-sales"), md=6),
-                        ]),
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="quantity-category"), md=6),
-                            dbc.Col(dcc.Graph(id="category-price"), md=6),
-                        ])
+                        dbc.Row([dbc.Col(dcc.Graph(id="top-products"), md=6), dbc.Col(dcc.Graph(id="price-segment-sales"), md=6)]),
+                        dbc.Row([dbc.Col(dcc.Graph(id="quantity-category"), md=6), dbc.Col(dcc.Graph(id="category-price"), md=6)])
                     ]
                 ),
-
                 dbc.Tab(
-                    label="Sales Analytics",
-                    tab_id="tab-sales",
+                    label="Sales Analytics", tab_id="tab-sales",
                     children=[
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="daily-sales"), md=8),
-                            dbc.Col(dcc.Graph(id="weekday-sales"), md=4),
-                        ]),
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id="quantity-revenue"), md=6),
-                            dbc.Col(dcc.Graph(id="order-value"), md=6),
-                        ])
+                        dbc.Row([dbc.Col(dcc.Graph(id="daily-sales"), md=8), dbc.Col(dcc.Graph(id="weekday-sales"), md=4)]),
+                        dbc.Row([dbc.Col(dcc.Graph(id="quantity-revenue"), md=6), dbc.Col(dcc.Graph(id="order-value"), md=6)])
                     ]
                 )
             ]
         ),
-
         html.Hr(),
         html.Div("Online Retail Intelligence Dashboard", className="footer")
     ],
@@ -575,7 +412,7 @@ app.layout = dbc.Container(
 
 
 # ============================================================
-# COMMON FILTER INPUTS (reused across callbacks)
+# CALLBACKS
 # ============================================================
 
 FILTER_INPUTS = [
@@ -594,15 +431,11 @@ def error_kpis():
 
 
 def error_figs(n):
-    fig = empty_figure("Callback error - check Render logs")
+    fig = empty_figure("Callback error - check logs")
     return tuple(fig for _ in range(n))
 
 
-# ============================================================
-# CALLBACK 1 — KPI CARDS (always mounted, independent of tabs)
-# ============================================================
-
-@app.callback(
+@dash_app.callback(
     [
         Output("kpi-revenue", "children"),
         Output("kpi-orders", "children"),
@@ -612,23 +445,13 @@ def error_figs(n):
     [Input("startup-trigger", "n_intervals")] + FILTER_INPUTS
 )
 def update_kpis(n_intervals, countries, categories, prices, segments, start_date, end_date):
-
-    print("\n🔥 KPI CALLBACK EXECUTED")
-
-    if DATA_ERROR:
+    if DATA_ERROR or analytics_df.empty:
         return error_kpis()
-
     try:
         df = get_filtered_df(countries, categories, prices, segments, start_date, end_date)
-
         if df.empty:
-            return (
-                create_kpi("Total Revenue", "£0"),
-                create_kpi("Total Orders", "0"),
-                create_kpi("Total Customers", "0"),
-                create_kpi("Total Products", "0"),
-            )
-
+            return create_kpi("Total Revenue", "£0"), create_kpi("Total Orders", "0"), create_kpi("Total Customers", "0"), create_kpi("Total Products", "0")
+        
         revenue = df["total_amount"].sum()
         orders = df["InvoiceNo"].nunique()
         customers = df[df["CustomerID"] != "Unknown"]["CustomerID"].nunique()
@@ -640,18 +463,11 @@ def update_kpis(n_intervals, countries, categories, prices, segments, start_date
             create_kpi("Total Customers", f"{customers:,}"),
             create_kpi("Total Products", f"{products:,}"),
         )
-
     except Exception as error:
-        print("\n🔥 KPI CALLBACK ERROR:", repr(error))
-        traceback.print_exc()
         return error_kpis()
 
 
-# ============================================================
-# CALLBACK 2 — EXECUTIVE OVERVIEW TAB
-# ============================================================
-
-@app.callback(
+@dash_app.callback(
     [
         Output("monthly-sales", "figure"),
         Output("country-sales", "figure"),
@@ -661,15 +477,10 @@ def update_kpis(n_intervals, countries, categories, prices, segments, start_date
     [Input("main-tabs", "active_tab")] + FILTER_INPUTS
 )
 def update_executive_tab(active_tab, countries, categories, prices, segments, start_date, end_date):
-
-    print("\n🔥 EXECUTIVE TAB CALLBACK EXECUTED (active_tab=%s)" % active_tab)
-
-    if DATA_ERROR:
+    if DATA_ERROR or analytics_df.empty:
         return error_figs(4)
-
     try:
         df = get_filtered_df(countries, categories, prices, segments, start_date, end_date)
-
         if df.empty:
             fig = empty_figure("No data available for selected filters")
             return fig, fig, fig, fig
@@ -677,40 +488,21 @@ def update_executive_tab(active_tab, countries, categories, prices, segments, st
         monthly = df.groupby("Month", as_index=False)["total_amount"].sum().sort_values("Month")
         fig_monthly = style_graph(px.line(monthly, x="Month", y="total_amount", markers=True, title="Monthly Revenue"))
 
-        country = (
-            df.groupby("Country", as_index=False)["total_amount"].sum()
-            .sort_values("total_amount", ascending=False).head(10)
-        )
+        country = df.groupby("Country", as_index=False)["total_amount"].sum().sort_values("total_amount", ascending=False).head(10)
         fig_country = style_graph(px.bar(country, x="total_amount", y="Country", orientation="h", title="Top Countries by Revenue"))
 
-        category = (
-            df.groupby("Category", as_index=False)["total_amount"].sum()
-            .sort_values("total_amount", ascending=False)
-        )
+        category = df.groupby("Category", as_index=False)["total_amount"].sum().sort_values("total_amount", ascending=False)
         fig_category = style_graph(px.bar(category, x="Category", y="total_amount", title="Revenue by Category"))
 
-        segment = (
-            df[df["CustomerID"] != "Unknown"]
-            .groupby("Segment", as_index=False)["CustomerID"].nunique()
-        )
-        if segment.empty:
-            fig_segment = empty_figure("No customer segment data")
-        else:
-            fig_segment = style_graph(px.pie(segment, names="Segment", values="CustomerID", title="Customer Segment Distribution"))
+        segment = df[df["CustomerID"] != "Unknown"].groupby("Segment", as_index=False)["CustomerID"].nunique()
+        fig_segment = style_graph(px.pie(segment, names="Segment", values="CustomerID", title="Customer Segment Distribution")) if not segment.empty else empty_figure("No customer segment data")
 
         return fig_monthly, fig_country, fig_category, fig_segment
-
     except Exception as error:
-        print("\n🔥 EXECUTIVE TAB CALLBACK ERROR:", repr(error))
-        traceback.print_exc()
         return error_figs(4)
 
 
-# ============================================================
-# CALLBACK 3 — CUSTOMER INTELLIGENCE TAB
-# ============================================================
-
-@app.callback(
+@dash_app.callback(
     [
         Output("rfm-scatter", "figure"),
         Output("customer-revenue", "figure"),
@@ -720,15 +512,10 @@ def update_executive_tab(active_tab, countries, categories, prices, segments, st
     [Input("main-tabs", "active_tab")] + FILTER_INPUTS
 )
 def update_customer_tab(active_tab, countries, categories, prices, segments, start_date, end_date):
-
-    print("\n🔥 CUSTOMER TAB CALLBACK EXECUTED (active_tab=%s)" % active_tab)
-
-    if DATA_ERROR:
+    if DATA_ERROR or analytics_df.empty:
         return error_figs(4)
-
     try:
         df = get_filtered_df(countries, categories, prices, segments, start_date, end_date)
-
         if df.empty:
             fig = empty_figure("No data available for selected filters")
             return fig, fig, fig, fig
@@ -737,57 +524,26 @@ def update_customer_tab(active_tab, countries, categories, prices, segments, sta
 
         rfm_plot = known.groupby(["CustomerID", "Segment"], as_index=False).agg(
             Recency=("Recency", "first"), Frequency=("Frequency", "first"), Monetary=("Monetary", "first")
-        )
-        rfm_plot = rfm_plot[rfm_plot["Frequency"].notna() & rfm_plot["Monetary"].notna()]
+        ).dropna(subset=["Frequency", "Monetary"])
+        fig_rfm = style_graph(px.scatter(rfm_plot, x="Frequency", y="Monetary", color="Segment", hover_data=["CustomerID", "Recency"], title="RFM Customer Analysis")) if not rfm_plot.empty else empty_figure("No RFM data")
 
-        if rfm_plot.empty:
-            fig_rfm = empty_figure("No RFM data")
-        else:
-            fig_rfm = style_graph(px.scatter(
-                rfm_plot, x="Frequency", y="Monetary", color="Segment",
-                hover_data=["CustomerID", "Recency"], title="RFM Customer Analysis"
-            ))
-
-        customer_revenue = (
-            known.groupby("CustomerID", as_index=False)["total_amount"].sum()
-            .sort_values("total_amount", ascending=False).head(15)
-        )
+        customer_revenue = known.groupby("CustomerID", as_index=False)["total_amount"].sum().sort_values("total_amount", ascending=False).head(15)
         fig_customer = style_graph(px.bar(customer_revenue, x="CustomerID", y="total_amount", title="Top Customers by Revenue"))
 
         recency_frequency = known.groupby("CustomerID", as_index=False).agg(
             Recency=("Recency", "first"), Frequency=("Frequency", "first"), Segment=("Segment", "first")
-        )
-        recency_frequency = recency_frequency[
-            recency_frequency["Recency"].notna() & recency_frequency["Frequency"].notna()
-        ]
+        ).dropna(subset=["Recency", "Frequency"])
+        fig_recency = style_graph(px.scatter(recency_frequency, x="Recency", y="Frequency", color="Segment", hover_data=["CustomerID"], title="Recency vs Frequency")) if not recency_frequency.empty else empty_figure("No recency/frequency data")
 
-        if recency_frequency.empty:
-            fig_recency = empty_figure("No recency/frequency data")
-        else:
-            fig_recency = style_graph(px.scatter(
-                recency_frequency, x="Recency", y="Frequency", color="Segment",
-                hover_data=["CustomerID"], title="Recency vs Frequency"
-            ))
-
-        segment_revenue = (
-            known.groupby("Segment", as_index=False)["total_amount"].sum()
-            .sort_values("total_amount", ascending=False)
-        )
+        segment_revenue = known.groupby("Segment", as_index=False)["total_amount"].sum().sort_values("total_amount", ascending=False)
         fig_segment_revenue = style_graph(px.bar(segment_revenue, x="Segment", y="total_amount", title="Revenue by Customer Segment"))
 
         return fig_rfm, fig_customer, fig_recency, fig_segment_revenue
-
     except Exception as error:
-        print("\n🔥 CUSTOMER TAB CALLBACK ERROR:", repr(error))
-        traceback.print_exc()
         return error_figs(4)
 
 
-# ============================================================
-# CALLBACK 4 — PRODUCT INTELLIGENCE TAB
-# ============================================================
-
-@app.callback(
+@dash_app.callback(
     [
         Output("top-products", "figure"),
         Output("price-segment-sales", "figure"),
@@ -797,15 +553,10 @@ def update_customer_tab(active_tab, countries, categories, prices, segments, sta
     [Input("main-tabs", "active_tab")] + FILTER_INPUTS
 )
 def update_product_tab(active_tab, countries, categories, prices, segments, start_date, end_date):
-
-    print("\n🔥 PRODUCT TAB CALLBACK EXECUTED (active_tab=%s)" % active_tab)
-
-    if DATA_ERROR:
+    if DATA_ERROR or analytics_df.empty:
         return error_figs(4)
-
     try:
         df = get_filtered_df(countries, categories, prices, segments, start_date, end_date)
-
         if df.empty:
             fig = empty_figure("No data available for selected filters")
             return fig, fig, fig, fig
@@ -818,31 +569,18 @@ def update_product_tab(active_tab, countries, categories, prices, segments, star
         price_sales = df.groupby("PriceSegment", as_index=False)["total_amount"].sum()
         fig_price = style_graph(px.bar(price_sales, x="PriceSegment", y="total_amount", title="Revenue by Price Segment"))
 
-        quantity_category = (
-            df.groupby("Category", as_index=False)["Quantity"].sum()
-            .sort_values("Quantity", ascending=False)
-        )
+        quantity_category = df.groupby("Category", as_index=False)["Quantity"].sum().sort_values("Quantity", ascending=False)
         fig_quantity = style_graph(px.bar(quantity_category, x="Category", y="Quantity", title="Quantity Sold by Category"))
 
         category_price = df.groupby(["Category", "PriceSegment"], as_index=False)["total_amount"].sum()
-        fig_category_price = style_graph(px.bar(
-            category_price, x="Category", y="total_amount", color="PriceSegment",
-            barmode="group", title="Category vs Price Segment"
-        ))
+        fig_category_price = style_graph(px.bar(category_price, x="Category", y="total_amount", color="PriceSegment", barmode="group", title="Category vs Price Segment"))
 
         return fig_products, fig_price, fig_quantity, fig_category_price
-
     except Exception as error:
-        print("\n🔥 PRODUCT TAB CALLBACK ERROR:", repr(error))
-        traceback.print_exc()
         return error_figs(4)
 
 
-# ============================================================
-# CALLBACK 5 — SALES ANALYTICS TAB
-# ============================================================
-
-@app.callback(
+@dash_app.callback(
     [
         Output("daily-sales", "figure"),
         Output("weekday-sales", "figure"),
@@ -852,15 +590,10 @@ def update_product_tab(active_tab, countries, categories, prices, segments, star
     [Input("main-tabs", "active_tab")] + FILTER_INPUTS
 )
 def update_sales_tab(active_tab, countries, categories, prices, segments, start_date, end_date):
-
-    print("\n🔥 SALES TAB CALLBACK EXECUTED (active_tab=%s)" % active_tab)
-
-    if DATA_ERROR:
+    if DATA_ERROR or analytics_df.empty:
         return error_figs(4)
-
     try:
         df = get_filtered_df(countries, categories, prices, segments, start_date, end_date)
-
         if df.empty:
             fig = empty_figure("No data available for selected filters")
             return fig, fig, fig, fig
@@ -871,33 +604,22 @@ def update_sales_tab(active_tab, countries, categories, prices, segments, start_
         weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         weekday = df.groupby("DayName", as_index=False)["total_amount"].sum()
         weekday["DayName"] = pd.Categorical(weekday["DayName"], categories=weekday_order, ordered=True)
-        weekday = weekday.sort_values("DayName")
-        fig_weekday = style_graph(px.bar(weekday, x="DayName", y="total_amount", title="Revenue by Weekday"))
+        fig_weekday = style_graph(px.bar(weekday.sort_values("DayName"), x="DayName", y="total_amount", title="Revenue by Weekday"))
 
         quantity_revenue = df.groupby(["StockCode", "Description"], as_index=False).agg(
             Quantity=("Quantity", "sum"), Revenue=("total_amount", "sum")
         ).sort_values("Revenue", ascending=False).head(200)
-        fig_quantity_revenue = style_graph(px.scatter(
-            quantity_revenue, x="Quantity", y="Revenue", size="Revenue",
-            hover_data=["Description"], title="Quantity vs Revenue"
-        ))
+        fig_quantity_revenue = style_graph(px.scatter(quantity_revenue, x="Quantity", y="Revenue", size="Revenue", hover_data=["Description"], title="Quantity vs Revenue"))
 
         order_value = df.groupby("InvoiceNo", as_index=False)["total_amount"].sum()
         fig_order_value = style_graph(px.histogram(order_value, x="total_amount", nbins=30, title="Order Value Distribution"))
 
         return fig_daily, fig_weekday, fig_quantity_revenue, fig_order_value
-
     except Exception as error:
-        print("\n🔥 SALES TAB CALLBACK ERROR:", repr(error))
-        traceback.print_exc()
         return error_figs(4)
 
 
-# ============================================================
-# RESET FILTERS
-# ============================================================
-
-@app.callback(
+@dash_app.callback(
     [
         Output("country-filter", "value"),
         Output("category-filter", "value"),
@@ -913,15 +635,7 @@ def reset_filters(n_clicks):
     return None, None, None, None, MIN_DATE, MAX_DATE
 
 
-# ============================================================
-# CLIENTSIDE: force Plotly to resize when a tab becomes active.
-# Plotly graphs rendered inside a Bootstrap tab-pane that starts
-# hidden (display:none) can end up 0px wide. Firing a resize
-# event after the tab switch/DOM update guarantees each graph
-# recalculates its width once its container is actually visible.
-# ============================================================
-
-app.clientside_callback(
+dash_app.clientside_callback(
     """
     function(active_tab) {
         setTimeout(function() {
@@ -936,33 +650,18 @@ app.clientside_callback(
 )
 
 
-# ============================================================
-# HEALTH ENDPOINT
-# ============================================================
-
 @server.route("/health")
 def health():
     if DATA_ERROR:
         return {"status": "error", "error": DATA_ERROR}
-
     return {
         "status": "ok",
         "sales_rows": int(len(analytics_df)),
-        "orders": int(analytics_df["InvoiceNo"].nunique()),
-        "customers": int(
-            analytics_df.loc[analytics_df["CustomerID"] != "Unknown", "CustomerID"].nunique()
-        ),
-        "products": int(analytics_df["StockCode"].nunique()),
-        "revenue": float(analytics_df["total_amount"].sum()),
-        "date_start": str(MIN_DATE),
-        "date_end": str(MAX_DATE),
+        "orders": int(analytics_df["InvoiceNo"].nunique()) if not analytics_df.empty else 0,
+        "revenue": float(analytics_df["total_amount"].sum()) if not analytics_df.empty else 0.0,
     }
 
 
-# ============================================================
-# LOCAL SERVER
-# ============================================================
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    dash_app.run(host="0.0.0.0", port=port, debug=False)
